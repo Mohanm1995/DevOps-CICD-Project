@@ -1,2 +1,26 @@
+# Maven build output
+target/
+*.jar
+*.war
+*.class
+
+# IDE files
+.idea/
+*.iml
+.eclipse
+.settings/
+.classpath
+.project
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Terraform
 terraform_files
-.test
+*.tfstate
+*.tfstate.backup
+.terraform/
+
+# Logs
+*.log
