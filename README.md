@@ -4,6 +4,10 @@ A production-style DevOps project that automates the build, test, containerizati
 
 ---
 
+![CI/CD Pipeline](images/cicd-pipeline.png)
+
+---
+
 ## Project Overview
 
 This project demonstrates a fully automated CI/CD pipeline. When a developer pushes code to GitHub, a webhook notifies Jenkins which immediately triggers the pipeline — running Maven tests, building a Docker image, pushing it to DockerHub, deploying to a Kubernetes cluster, and monitoring the entire infrastructure using Prometheus and Grafana.
