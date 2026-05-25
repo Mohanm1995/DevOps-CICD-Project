@@ -240,7 +240,7 @@ Grafana    : http://<master-ip>:3000 (admin/admin)
 
 **Mohan M** 
 
-AWS & DevOps Engineer (Fresher)
+AWS & DevOps Engineer
 
 ---
 
