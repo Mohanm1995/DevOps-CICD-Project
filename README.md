@@ -1,12 +1,22 @@
+---
+
 # End-to-End CI/CD Pipeline with Monitoring
 
-A production-style DevOps project that automates the build, test, containerization, deployment, and monitoring of a Spring Boot application using industry-standard tools. The pipeline triggers automatically on every GitHub push via webhook integration.
+A production-style DevOps project that automates the build, test, 
+containerization, deployment, and monitoring of a Spring Boot application 
+using industry-standard tools. The pipeline triggers automatically on every 
+GitHub push via webhook integration with end-to-end deployment completing 
+in under 5 minutes.
 
 ---
 
 ## Project Overview
 
-This project demonstrates a fully automated CI/CD pipeline. When a developer pushes code to GitHub, a webhook notifies Jenkins which immediately triggers the pipeline — running Maven tests, building a Docker image, pushing it to DockerHub, deploying to a Kubernetes cluster, and monitoring the entire infrastructure using Prometheus and Grafana.
+This project demonstrates a fully automated CI/CD pipeline. When a developer 
+pushes code to GitHub, a webhook notifies Jenkins which immediately triggers 
+the pipeline — running Maven tests, building a Docker image, pushing it to 
+DockerHub, deploying to a Kubernetes cluster, and monitoring the entire 
+infrastructure using Prometheus and Grafana.
 
 ---
 
@@ -27,7 +37,7 @@ Developer → GitHub Push
                ↓
         Kubernetes Deploy (Master + Worker Nodes)
                ↓
-        Prometheus (Metrics Collection)
+        Prometheus (Metrics Collection — 15s intervals)
                ↓
         Grafana (Visualization + Monitoring)
 ```
@@ -56,13 +66,14 @@ Developer → GitHub Push
 | Node | Instance | Role |
 |---|---|---|
 | Master Node | AWS EC2 (Ubuntu) | Jenkins, Docker, Kubernetes Master, Prometheus, Grafana |
-| Worker Node(s) | AWS EC2 (Ubuntu) | Kubernetes Worker, Node Exporter |
+| Worker Node | AWS EC2 (Ubuntu) | Kubernetes Worker, Node Exporter |
 
 ---
 
 ## How Automatic Triggering Works
 
-This pipeline does not require manual intervention. Every push to the main branch automatically triggers the pipeline via GitHub webhook.
+This pipeline does not require manual intervention. Every push to the main 
+branch automatically triggers the pipeline via GitHub webhook.
 
 **Flow:**
 ```
@@ -76,7 +87,8 @@ Full pipeline runs automatically end to end
 ```
 
 **Setup required:**
-- GitHub repo → Settings → Webhooks → Payload URL: `http://<master-ip>:8080/github-webhook/`
+- GitHub repo → Settings → Webhooks → Payload URL: 
+  `http://<master-ip>:8080/github-webhook/`
 - Jenkins job → Build Triggers → GitHub hook trigger for GITScm polling → enabled
 - Jenkins GitHub Integration plugin installed
 - EC2 port 8080 open in security group
@@ -100,7 +112,8 @@ Full pipeline runs automatically end to end
 
 ## Monitoring Stack
 
-Prometheus scrapes metrics from Jenkins and all nodes. Grafana visualizes them in real time.
+Prometheus scrapes metrics from Jenkins and all nodes. Grafana visualizes 
+them in real time.
 
 **Scrape targets configured in prometheus.yml:**
 
@@ -134,6 +147,7 @@ DevOps-CICD-Project/
 ├── deployment.yaml             # Kubernetes Deployment manifest
 ├── service.yaml                # Kubernetes Service manifest (NodePort)
 ├── Jenkinsfile                 # Complete CI/CD pipeline definition
+├── prometheus.yaml             # Prometheus scrape configuration
 ├── pom.xml                     # Maven build configuration
 └── README.md                   # Project documentation
 ```
@@ -225,22 +239,107 @@ Grafana    : http://<master-ip>:3000 (admin/admin)
 
 ---
 
+## Challenges and Resolutions
+
+### 1. Ubuntu 22.04 apt-key Deprecation Breaking Package Installation
+
+**Issue:** Jenkins and Docker installation failed on Ubuntu 22.04 with 
+GPG key warnings and repository errors during `apt-get install`.
+
+**Root Cause:** Ubuntu 22.04 deprecated the `apt-key` method for adding 
+GPG keys. The legacy `apt-key add` command used in most installation 
+guides was no longer supported, causing package manager to reject the 
+repository signatures.
+
+**Fix:** Replaced all `apt-key add` commands with the new recommended 
+approach — downloading GPG keys directly into `/usr/share/keyrings/` 
+using `gpg --dearmor` and referencing the keyring file explicitly in 
+the `/etc/apt/sources.list.d/` repository entry using the 
+`signed-by` option. Applied this fix for both Jenkins and Docker 
+repository setup separately.
+
+---
+
+### 2. Jenkins Disk Space Failure Crashing Pipeline Mid-Run
+
+**Issue:** Jenkins pipeline was failing mid-run with a disk space 
+threshold error. Builds were being aborted by Jenkins before completing 
+the Docker push stage.
+
+**Root Cause:** Jenkins has a built-in disk space health check that 
+aborts builds when available disk space drops below a threshold. 
+The `/tmp` directory on the EC2 master node was mounted as a `tmpfs` 
+RAM-based filesystem — not actual disk storage — causing Jenkins to 
+misread available space. Additionally, accumulated Docker images and 
+build artifacts from previous runs were consuming EBS storage.
+
+**Fix:** Remounted the `/tmp` tmpfs with increased size and updated 
+`/etc/fstab` to persist the change across reboots. Implemented Docker 
+cleanup policies inside the Jenkinsfile — adding `docker system prune -f` 
+as a post-build step to remove dangling images and stopped containers 
+after every run. Extended EC2 EBS volume capacity to provide additional 
+headroom for build artifacts.
+
+---
+
+### 3. Grafana-Prometheus Metrics Timeout (i/o timeout)
+
+**Issue:** Grafana was showing `i/o timeout` errors when trying to fetch 
+metrics from the Prometheus datasource. Dashboards were not loading 
+any data.
+
+**Root Cause:** The Grafana datasource was configured with the Prometheus 
+URL set to the EC2 public IP address. On the EC2 instance, traffic to 
+the public IP routes out through the internet gateway and back in — 
+which was being blocked by the EC2 security group's inbound rules. 
+Grafana and Prometheus are both running on the same master node, 
+so routing through the public IP was unnecessary and broken.
+
+**Fix:** Changed the Prometheus datasource URL in Grafana from 
+`http://<public-ip>:9090` to `http://localhost:9090`. Since both 
+services run on the same EC2 instance, localhost communication bypasses 
+the security group entirely. Dashboards loaded immediately after 
+the datasource URL was updated.
+
+---
+
+### 4. Maven Build Defaulting to Java 8 Instead of Java 17
+
+**Issue:** Maven build stage was failing with compilation errors. 
+Jenkins was using Java 8 for the build despite Java 17 being installed 
+on the master node.
+
+**Root Cause:** The Jenkinsfile had no `tools` block defined, so Jenkins 
+defaulted to the system Java version (Java 8) instead of using the 
+configured Java 17 tool installation. The pom.xml required Java 17 
+features which Java 8 could not compile.
+
+**Fix:** Added a `tools` block to the Jenkinsfile explicitly specifying 
+the Java 17 installation name configured in Jenkins Global Tool 
+Configuration. This forced the pipeline to use Java 17 for all Maven 
+build stages regardless of the system default.
+
+```groovy
+tools {
+    jdk 'Java17'
+    maven 'Maven3'
+}
+```
+
+---
+
 ## Key Learnings
 
-- Automated end-to-end pipeline from code commit to production deployment without manual intervention
+- Automated end-to-end pipeline from code commit to production deployment 
+  without manual intervention
 - GitHub webhook integration for real-time pipeline triggering on every push
 - Docker containerization of a Java Spring Boot application
 - Kubernetes deployment and service management across master and worker nodes
 - Real-time infrastructure and pipeline monitoring with Prometheus and Grafana
 - Secure credential management in Jenkins using credentials binding plugin
-
----
-
-## Author
-
-**Mohan M** 
-
-AWS & DevOps Engineer
+- Ubuntu 22.04 package repository management with modern GPG key handling
+- Docker storage cleanup strategies to prevent disk exhaustion in CI environments
+- Grafana-Prometheus network communication patterns on single-host setups
 
 ---
 
@@ -250,5 +349,15 @@ AWS & DevOps Engineer
 - Prometheus metrics plugin must be installed in Jenkins before monitoring works
 - Node Exporter must be running on all nodes before Prometheus scraping starts
 - Update image name in deployment.yaml if you fork this repo
+- Use `localhost` not public IP for Grafana-Prometheus datasource URL 
+  when both run on the same EC2 instance
+
+---
+
+## Author
+
+**Mohan M**
+
+AWS & DevOps Engineer
 
 ---
